@@ -1,7 +1,0 @@
-# Requirements for Algorithm & Complexity Project: Hybrid SARIMA-NBEATS
-numpy
-pandas
-scikit-learn
-torch
-matplotlib
-statsmodels
