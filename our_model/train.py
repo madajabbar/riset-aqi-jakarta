@@ -3,7 +3,7 @@
 Pipeline (faithful to baseline_emd-transformer-bilstm.py, extended with --weather):
   1. scale AQI, EMD -> IMFs
   2. per IMF: Transformer-BiLSTM on window (value [+ weather]); keep the
-     reference's LinearRegression per-IMF fallback (pick whichever RMSE wins)
+     reference\'s LinearRegression per-IMF fallback (pick whichever RMSE wins)
   3. fuse predicted IMFs (+ weather) with a BiLSTM -> AQI
   4. metrics RMSE/MAE/MAPE on inverse-scaled test split
 
@@ -12,7 +12,7 @@ Colab:            !python our_model/train.py --weather --epochs 100
 """
 import argparse
 import time
-
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -55,9 +55,11 @@ def main():
     set_seed(a.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     from pathlib import Path
+    
     data_dir = str(Path(a.data_dir or Path(__file__).resolve().parent.parent / "our_data"))
     df = datamod.load_merged(data_dir)
     y, w, scaler, dfk = datamod.make_series(df, a.start, a.end, a.target)
+    
     K = w.shape[1] if a.weather else 0
     w_use = w if a.weather else np.zeros((len(w), 0), np.float32)
     tw, ow = a.window, a.horizon
@@ -77,7 +79,7 @@ def main():
     te_ld = DataLoader(TensorDataset(te_X, te_Y), 1000, shuffle=False)
 
     def linear_fallback(imf):
-        """Reference's per-IMF LinearRegression on the window (no weather)."""
+        """Reference\'s per-IMF LinearRegression on the window (no weather)."""
         arr = imf
         n = len(arr) - tw - ow + 1
         Z = np.stack([arr[i:i + tw] for i in range(n)])
@@ -88,12 +90,42 @@ def main():
 
     criterion = nn.MSELoss()
     te_start = split + tw + ow - 1  # absolute y-index of first test-pred target step
-    preds_te = []
+    
+    # --- CHECKPOINT SYSTEM ---
+    CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints"
+    CKPT_DIR.mkdir(exist_ok=True)
+    
+    preds_te = [None] * n_imf
+    
+    # Restore previously finished IMFs
+    for j in range(n_imf):
+        pth = CKPT_DIR / f"imf_{j}_info.npz"
+        if pth.exists():
+            try:
+                data = np.load(str(pth), allow_pickle=True)
+                preds_te[j] = data["pred"]
+                print(f"[RESUMED] Loaded completed IMF {j+1} (saved mode: {data.get(\'mode\', \'unknown\')})")
+            except Exception as e:
+                print(f"[WARNING] Could not load IMF {j+1} checkpoint ({e}), will retrain.")
+                preds_te[j] = None
+        else:
+            # Init empty placeholder
+            pass
+
+    # --- PER-IMF TRAINING LOOP ---
     for j, imf in enumerate(imfs):
+        # Skip if already done
+        if preds_te[j] is not None: 
+            print(f"Skipping already trained IMF {j+1}")
+            continue
+            
         m = modelmod.TransAm(n_exog=K).to(device)
         opt = torch.optim.AdamW(m.parameters(), lr=a.lr)
         sch = torch.optim.lr_scheduler.StepLR(opt, 1, gamma=0.95)
         ep = 3 if a.smoke else a.epochs
+        
+        print(f"Training IMF {j+1}/{n_imf} ...")
+        
         for epoch in range(1, ep + 1):
             m.train()
             tot, t_ep = 0, time.time()
@@ -108,20 +140,35 @@ def main():
             sch.step()
             if epoch % max(1, ep // 5) == 0:
                 print(f"IMF{j+1} ep{epoch} loss {tot/len(tr_ld):.5f} {time.time()-t_ep:.0f}s")
+                
         m.eval()
         with torch.no_grad():
             pred = torch.cat([m(bx.transpose(0, 1).to(device))[-1].view(-1).cpu() for bx, _ in te_ld]).numpy()
+            
         # linear fallback comparison on test part of this IMF (aligned)
         lin = linear_fallback(imf)[:, -1]
         truth_te = imf[te_start: te_start + len(pred)]
         rmse_t = metrics.mean_squared_error(pred, truth_te) ** 0.5
         rmse_l = metrics.mean_squared_error(lin[:len(pred)], truth_te[:len(lin)]) ** 0.5
         chosen = pred if rmse_t <= rmse_l else lin[:len(pred)]
-        print(f"IMF{j+1}: transformer {rmse_t:.4f} | linear {rmse_l:.4f} -> {'tf' if rmse_t<=rmse_l else 'lin'}")
-        preds_te.append(chosen)
+        chosen_mode = "tf" if rmse_t <= rmse_l else "lin"
+        
+        print(f"IMF{j+1}: transformer {rmse_t:.4f} | linear {rmse_l:.4f} -> {chosen_mode}")
+        
+        # --- SAVE CHECKPOINT IMMEDIATELY ---
+        save_dict = {
+            'pred': chosen,
+            'truth': truth_te,
+            'rmse_trans': float(rmse_t),
+            'rmse_lin': float(rmse_l),
+            'mode': chosen_mode
+        }
+        np.savez(str(CKPT_DIR / f"imf_{j}_info.npz"), **save_dict)
+        print(f"[CHECKPOINT SAVED] IMF {j+1} state saved to disk.")
+        
+        preds_te[j] = chosen
 
     # 3. fusion: train on true train-split IMFs (+weather), test on predicted IMFs
-    #    (same protocol as the reference: position-aligned, no shift games)
     tr_imf_stack = np.stack(imfs, 1)[:split]
     test_imf_stack = np.stack(preds_te, 1)  # (n_te_pred, n_imf)
     fx_tr = np.concatenate([tr_imf_stack, w_use[:split]], 1) if K else tr_imf_stack
@@ -131,15 +178,27 @@ def main():
     fx_tr = torch.tensor(fx_tr.astype(np.float32)).unsqueeze(1).to(device)
     fy_tr = torch.tensor(fy_tr.astype(np.float32)).unsqueeze(1).to(device)
     fx_te = torch.tensor(fx_te.astype(np.float32)).unsqueeze(1).to(device)
-    fusion = modelmod.LstmRNN(n_imf + K).to(device)
-    fopt = torch.optim.Adam(fusion.parameters(), lr=1e-2)
-    ep = 50 if a.smoke else a.fusion_epochs
-    for e in range(ep):
-        out = fusion(fx_tr)
-        loss = criterion(out, fy_tr)
-        fopt.zero_grad(); loss.backward(); fopt.step()
-        if (e + 1) % max(1, ep // 5) == 0:
-            print(f"fusion ep{e+1} loss {loss.item():.5f}")
+    
+    FUSION_CKPT = CKPT_DIR / "fusion_best.pt"
+    
+    if FUSION_CKPT.exists():
+        print("\n[RESUMING] Loading saved Fusion Model...")
+        fusion = modelmod.LstmRNN(n_imf + K).to(device)
+        fusion.load_state_dict(torch.load(FUSION_CKPT, map_location=device))
+    else:
+        print("\nTraining Fusion Layer from scratch...")
+        fusion = modelmod.LstmRNN(n_imf + K).to(device)
+        fopt = torch.optim.Adam(fusion.parameters(), lr=1e-2)
+        ep = 50 if a.smoke else a.fusion_epochs
+        for e in range(ep):
+            out = fusion(fx_tr)
+            loss = criterion(out, fy_tr)
+            fopt.zero_grad(); loss.backward(); fopt.step()
+            if (e + 1) % max(1, ep // 5) == 0:
+                print(f"fusion ep{e+1} loss {loss.item():.5f}")
+        torch.save(fusion.state_dict(), FUSION_CKPT)
+        print("Fusion model saved to checkpoint.")
+
     fusion.eval()
     with torch.no_grad():
         pre = fusion(fx_te).cpu().numpy().flatten()
