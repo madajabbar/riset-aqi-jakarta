@@ -110,7 +110,7 @@ def main():
                 print(f"IMF{j+1} ep{epoch} loss {tot/len(tr_ld):.5f} {time.time()-t_ep:.0f}s")
         m.eval()
         with torch.no_grad():
-            pred = torch.cat([m(bx.transpose(0, 1))[-1].view(-1).cpu() for bx, _ in te_ld]).numpy()
+            pred = torch.cat([m(bx.transpose(0, 1).to(device))[-1].view(-1).cpu() for bx, _ in te_ld]).numpy()
         # linear fallback comparison on test part of this IMF (aligned)
         lin = linear_fallback(imf)[:, -1]
         truth_te = imf[te_start: te_start + len(pred)]
