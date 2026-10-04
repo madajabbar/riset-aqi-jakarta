@@ -2,3 +2,12 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+.kilo/
+our_data/openaq_raw.csv
+*.log
+openaq_scan.txt
+results/
+imf.csv
+emd-*.png
+loss*.png
+flowchart.png
