@@ -3,7 +3,7 @@
 Pipeline (faithful to baseline_emd-transformer-bilstm.py, extended with --weather):
   1. scale AQI, EMD -> IMFs
   2. per IMF: Transformer-BiLSTM on window (value [+ weather]); keep the
-     reference\'s LinearRegression per-IMF fallback (pick whichever RMSE wins)
+     reference's LinearRegression per-IMF fallback (pick whichever RMSE wins)
   3. fuse predicted IMFs (+ weather) with a BiLSTM -> AQI
   4. metrics RMSE/MAE/MAPE on inverse-scaled test split
 
@@ -79,7 +79,7 @@ def main():
     te_ld = DataLoader(TensorDataset(te_X, te_Y), 1000, shuffle=False)
 
     def linear_fallback(imf):
-        """Reference\'s per-IMF LinearRegression on the window (no weather)."""
+        """Reference's per-IMF LinearRegression on the window (no weather)."""
         arr = imf
         n = len(arr) - tw - ow + 1
         Z = np.stack([arr[i:i + tw] for i in range(n)])
@@ -104,7 +104,8 @@ def main():
             try:
                 data = np.load(str(pth), allow_pickle=True)
                 preds_te[j] = data["pred"]
-                print(f"[RESUMED] Loaded completed IMF {j+1} (saved mode: {data.get(\'mode\', \'unknown\')})")
+                mode = str(data.get("mode", "unknown"))
+                print(f"[RESUMED] Loaded completed IMF {j+1} (saved mode: {mode})")
             except Exception as e:
                 print(f"[WARNING] Could not load IMF {j+1} checkpoint ({e}), will retrain.")
                 preds_te[j] = None
