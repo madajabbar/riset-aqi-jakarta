@@ -119,11 +119,13 @@ def main():
 
     criterion = nn.MSELoss()
 
-    # --- CHECKPOINT SYSTEM (per-arm + v2: format npz lama tidak punya pred_va) ---
+    # --- CHECKPOINT SYSTEM (per-arm + jendela tanggal + v2: format npz lama tanpa pred_va) ---
     tag = a.tag or ("weather" if a.weather else "base")
     if a.smoke:
         tag += "_smoke"  # run pendek JANGAN berbagi checkpoint dengan run penuh
-    CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints" / f"{tag}-v2"
+    # jendela tanggal ikut ke nama: uji cepat 1 bulan tidak boleh di-resume run penuh
+    run_id = f"{tag}-{a.start or 'all'}_{a.end or 'all'}"
+    CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints" / f"{run_id}-v2"
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
     preds_te = [None] * n_imf
@@ -237,7 +239,7 @@ def main():
     rmse_v = metrics.mean_squared_error(pre_inv, true_inv) ** 0.5
     mae = metrics.mean_absolute_error(true_inv, pre_inv)
     mape = metrics.mean_absolute_percentage_error(true_inv, pre_inv)
-    out_csv = Path(__file__).resolve().parent.parent / "our_model" / "results" / f"jakarta-{a.target}-{tag}-win{tw}-h{ow}.csv"
+    out_csv = Path(__file__).resolve().parent.parent / "our_model" / "results" / f"jakarta-{a.target}-{run_id}-win{tw}-h{ow}.csv"
     out_csv.parent.mkdir(exist_ok=True)
     pd.DataFrame({"pred": pre_inv.flatten(), "truth": true_inv.flatten()},
                  index=dfk.index[te_start: te_start + len(pre)]).to_csv(out_csv)
