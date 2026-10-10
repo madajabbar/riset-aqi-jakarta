@@ -52,6 +52,9 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--lr", type=float, default=0.001)
     p.add_argument("--weather", action="store_true", help="enable exogenous weather channels (our model)")
+    p.add_argument("--exo-scale", choices=("imf", "unit"), default="imf",
+                   help="skala kanal cuaca: 'imf' = disamakan ke amplitudo IMF (default), "
+                        "'unit' = z-score murni (perilaku run 10 Okt pagi)")
     p.add_argument("--start", default=None, help="ISO date, e.g. 2015-01-01")
     p.add_argument("--end", default=None)
     p.add_argument("--smoke", action="store_true")
@@ -95,6 +98,18 @@ def main():
     print(f"EMD: {len(imfs)} IMFs in {time.time()-t0:.0f}s")
     n_imf = len(imfs)
 
+    # Skala kanal cuaca. z-score murni (std=1) jauh lebih besar dari amplitudo IMF
+    # (std IMF ~1e-3..1e-1 setelah MinMaxScaler), jadi cuaca mendominasi input dan
+    # jaringan belajar "cuaca -> AQI" alih-alih "jumlah IMF -> AQI".
+    exo_scale = 1.0
+    if K:
+        if a.exo_scale == "imf":
+            exo_scale = float(np.std(np.stack(imfs)))
+        imf_sd = np.std(imfs, axis=1)
+        print(f"exo-scale: {a.exo_scale} (faktor {exo_scale:.4f}) | std IMF "
+              f"{imf_sd.min():.5f}..{imf_sd.max():.5f} vs std cuaca 1.0")
+        w_use = (w_use * exo_scale).astype(np.float32)
+
     def loaders(series, lo, hi):
         X, Y, _ = datamod.make_windows(series, w_use, tw, ow)
         ds = TensorDataset(torch.tensor(X[lo:hi]), torch.tensor(Y[lo:hi]))
@@ -124,7 +139,7 @@ def main():
     if a.smoke:
         tag += "_smoke"  # run pendek JANGAN berbagi checkpoint dengan run penuh
     # jendela tanggal ikut ke nama: uji cepat 1 bulan tidak boleh di-resume run penuh
-    run_id = f"{tag}-{a.start or 'all'}_{a.end or 'all'}"
+    run_id = f"{tag}-{a.start or 'all'}_{a.end or 'all'}-exo{a.exo_scale}"
     CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints" / f"{run_id}-v2"
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
