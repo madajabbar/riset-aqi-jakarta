@@ -91,9 +91,10 @@ def main():
     criterion = nn.MSELoss()
     te_start = split + tw + ow - 1  # absolute y-index of first test-pred target step
     
-    # --- CHECKPOINT SYSTEM ---
-    CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints"
-    CKPT_DIR.mkdir(exist_ok=True)
+    # --- CHECKPOINT SYSTEM (per-arm, biar base & weather tidak saling menimpa) ---
+    tag = a.tag or ("weather" if a.weather else "base")
+    CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints" / tag
+    CKPT_DIR.mkdir(parents=True, exist_ok=True)
     
     preds_te = [None] * n_imf
     
@@ -210,7 +211,6 @@ def main():
     rmse = metrics.mean_squared_error(pre_inv, true_inv) ** 0.5
     mae = metrics.mean_absolute_error(true_inv, pre_inv)
     mape = metrics.mean_absolute_percentage_error(true_inv, pre_inv)
-    tag = a.tag or ("weather" if a.weather else "base")
     if a.smoke:
         tag += "_smoke"
     out_csv = Path(__file__).resolve().parent.parent / "our_model" / "results" / f"jakarta-{a.target}-{tag}-win{tw}-h{ow}.csv"
