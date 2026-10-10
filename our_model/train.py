@@ -121,6 +121,8 @@ def main():
 
     # --- CHECKPOINT SYSTEM (per-arm + v2: format npz lama tidak punya pred_va) ---
     tag = a.tag or ("weather" if a.weather else "base")
+    if a.smoke:
+        tag += "_smoke"  # run pendek JANGAN berbagi checkpoint dengan run penuh
     CKPT_DIR = Path(__file__).resolve().parent / "results" / "checkpoints" / f"{tag}-v2"
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -235,8 +237,6 @@ def main():
     rmse_v = metrics.mean_squared_error(pre_inv, true_inv) ** 0.5
     mae = metrics.mean_absolute_error(true_inv, pre_inv)
     mape = metrics.mean_absolute_percentage_error(true_inv, pre_inv)
-    if a.smoke:
-        tag += "_smoke"
     out_csv = Path(__file__).resolve().parent.parent / "our_model" / "results" / f"jakarta-{a.target}-{tag}-win{tw}-h{ow}.csv"
     out_csv.parent.mkdir(exist_ok=True)
     pd.DataFrame({"pred": pre_inv.flatten(), "truth": true_inv.flatten()},
